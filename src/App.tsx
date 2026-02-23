@@ -80,6 +80,9 @@ export default function App() {
   const [port, setPort] = useState('COM3');
   const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
   const [showConnectPopup, setShowConnectPopup] = useState(false);
+  const [isBoardDetected, setIsBoardDetected] = useState(false);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetryData[]>([]);
   const [cpuTemp, setCpuTemp] = useState(32.4);
   const [clockSpeed, setClockSpeed] = useState(16);
@@ -112,12 +115,30 @@ void loop() {
 
   const terminalRef = useRef<HTMLDivElement>(null);
 
+  // --- Hardware Detection Simulation ---
+  useEffect(() => {
+    // Simulate a board being plugged in after 5 seconds for demo purposes
+    // In a real app, this would use navigator.serial.addEventListener('connect', ...)
+    const detectionTimeout = setTimeout(() => {
+      if (status === 'Disconnected' && !isBoardDetected) {
+        setIsBoardDetected(true);
+        addLog("Hardware Event: New USB Device Detected", 'info');
+      }
+    }, 5000);
+
+    return () => clearTimeout(detectionTimeout);
+  }, [status, isBoardDetected]);
+
   // --- AI Logic ---
   const analyzeHealth = async () => {
-    if (!process.env.GEMINI_API_KEY) return;
+    const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+      addLog("AI Diagnostic: API Key missing. Set GEMINI_API_KEY in environment.", 'warn');
+      return;
+    }
     setIsAnalyzing(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const model = ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Analyze this Arduino ${board} telemetry: 
@@ -201,27 +222,56 @@ void loop() {
   };
 
   const handleConnect = () => {
+    setIsBoardDetected(false);
     setStatus('Connecting');
+    setConnectionAttempt(1);
+    setConnectionError(null);
     addLog(`Initializing connection to ${board} on ${port}...`, 'info');
     
-    setTimeout(() => {
-      setStatus('Connected');
-      setShowConnectPopup(true);
-      addLog(`Connected successfully at ${baudRate} baud.`, 'info');
-      addLog(`Firmware version 2.4.1 detected.`, 'info');
+    // Simulate connection attempts
+    const runAttempt = (attempt: number) => {
+      setConnectionAttempt(attempt);
+      addLog(`Connection attempt ${attempt}/3...`, 'info');
       
-      // Set clock speed based on board
-      if (board === 'Uno' || board === 'Nano') setClockSpeed(16);
-      else if (board === 'Mega 2560') setClockSpeed(16);
-      else if (board === 'ESP32') setClockSpeed(240);
-      else if (board === 'ESP8266') setClockSpeed(80);
-      
-      analyzeHealth();
-    }, 2000);
+      setTimeout(() => {
+        // Simulate a 30% chance of failure for the first two attempts
+        const failed = attempt < 3 && Math.random() > 0.7;
+        
+        if (failed) {
+          addLog(`Attempt ${attempt} failed: Handshake timeout.`, 'error');
+          if (attempt < 3) {
+            addLog(`Retrying in 1.5s...`, 'warn');
+            setTimeout(() => runAttempt(attempt + 1), 1500);
+          } else {
+            setStatus('Error');
+            setConnectionError("Failed to establish link after 3 attempts.");
+            triggerAlert('CONN_FAILED', 'Connection Failed: Handshake Timeout', 'error');
+          }
+        } else {
+          // Success
+          setStatus('Connected');
+          setShowConnectPopup(true);
+          addLog(`Connected successfully at ${baudRate} baud.`, 'info');
+          addLog(`Firmware version 2.4.1 detected.`, 'info');
+          
+          if (board === 'Uno' || board === 'Nano') setClockSpeed(16);
+          else if (board === 'Mega 2560') setClockSpeed(16);
+          else if (board === 'ESP32') setClockSpeed(240);
+          else if (board === 'ESP8266') setClockSpeed(80);
+          
+          analyzeHealth();
+        }
+      }, 1500);
+    };
+
+    runAttempt(1);
   };
 
   const handleDisconnect = () => {
     setStatus('Disconnected');
+    setIsBoardDetected(false);
+    setConnectionAttempt(0);
+    setConnectionError(null);
     addLog("Connection terminated by user.", 'warn');
     setTelemetry([]);
     setAlerts([]);
@@ -342,6 +392,23 @@ void loop() {
 
               <section className="space-y-4">
                 <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                  <Usb className="w-3 h-3" /> Hardware Simulation
+                </h3>
+                <button 
+                  onClick={() => {
+                    setIsBoardDetected(true);
+                    setIsMenuOpen(false);
+                    addLog("Manual Simulation: Board Connected", 'info');
+                  }}
+                  disabled={status !== 'Disconnected'}
+                  className="w-full py-3 bg-white/5 border border-white/10 rounded text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-all disabled:opacity-30"
+                >
+                  Simulate USB Connection
+                </button>
+              </section>
+
+              <section className="space-y-4">
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
                   <HelpCircle className="w-3 h-3" /> About Pulse Console
                 </h3>
                 <div className="space-y-3 text-[11px] text-slate-400 leading-relaxed">
@@ -446,6 +513,36 @@ void loop() {
 
       <MenuDrawer />
 
+      {/* Hardware Detection Popup */}
+      <AnimatePresence>
+        {isBoardDetected && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4 pointer-events-none"
+          >
+            <div className="hardware-card p-4 border-arduino-teal/50 bg-arduino-teal/10 shadow-[0_0_30px_rgba(0,135,143,0.3)] flex items-center justify-between pointer-events-auto">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-arduino-teal rounded flex items-center justify-center animate-pulse">
+                  <Usb className="text-white w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-arduino-teal">Hardware Detected</div>
+                  <div className="text-xs font-bold text-white">Arduino {board} on {port}</div>
+                </div>
+              </div>
+              <button 
+                onClick={handleConnect}
+                className="px-4 py-2 bg-arduino-teal text-white rounded text-[10px] font-bold uppercase tracking-widest hover:scale-105 transition-all"
+              >
+                Initialize Link
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-white/10 pb-6">
@@ -468,11 +565,22 @@ void loop() {
                   "flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest",
                   status === 'Connected' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : 
                   status === 'Connecting' ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : 
-                  "bg-red-500/10 text-red-400 border border-red-500/20"
+                  status === 'Error' ? "bg-red-500/10 text-red-400 border border-red-500/20" :
+                  "bg-slate-500/10 text-slate-500 border border-white/5"
                 )}>
-                  <div className={cn("w-1.5 h-1.5 rounded-full", status === 'Connected' ? "bg-emerald-400 animate-pulse" : "bg-slate-500")} />
-                  {status}
+                  <div className={cn(
+                    "w-1.5 h-1.5 rounded-full", 
+                    status === 'Connected' ? "bg-emerald-400 animate-pulse" : 
+                    status === 'Connecting' ? "bg-amber-400 animate-bounce" :
+                    status === 'Error' ? "bg-red-400" : "bg-slate-500"
+                  )} />
+                  {status === 'Connecting' ? `Connecting (Attempt ${connectionAttempt}/3)` : status}
                 </div>
+                {connectionError && (
+                  <span className="text-[9px] text-red-400 font-bold uppercase tracking-widest animate-pulse">
+                    Error: {connectionError}
+                  </span>
+                )}
                 <span className="text-[9px] opacity-40 uppercase tracking-widest">System: {board} @ {port}</span>
               </div>
             </div>
@@ -487,14 +595,9 @@ void loop() {
                 <Power className="w-4 h-4" /> Disconnect
               </button>
             ) : (
-              <button 
-                onClick={handleConnect}
-                disabled={status === 'Connecting'}
-                className="flex items-center gap-2 px-6 py-2 bg-arduino-teal text-white rounded shadow-[0_0_15px_rgba(0,135,143,0.3)] hover:scale-105 transition-all text-xs font-bold uppercase tracking-widest disabled:opacity-50"
-              >
-                {status === 'Connecting' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Usb className="w-4 h-4" />}
-                {status === 'Connecting' ? 'Connecting...' : 'Initialize Link'}
-              </button>
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500 animate-pulse">
+                Awaiting Hardware...
+              </div>
             )}
           </div>
         </header>
