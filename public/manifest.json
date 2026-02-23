@@ -1,0 +1,17 @@
+{
+  "name": "Arduino Pulse Console",
+  "short_name": "ArduinoPulse",
+  "description": "Professional Arduino monitoring and control dashboard.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#00878f",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3662/3662311.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
